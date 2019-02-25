@@ -1,0 +1,240 @@
+import cv2
+import numpy as np
+import math
+
+def drawLine(image, point1, point2, color=(255, 0, 0), thickness=5, lineType=cv2.LINE_AA):
+    result = imageCopy(image)
+    return cv2.line(result, point1, point2, color, thickness, lineType)
+
+def draw_lane_lines(image, lines, color=[255, 0, 0], thickness=10):
+    # make a separate image to draw lines and combine with the orignal later
+    line_image = np.zeros_like(image)
+    for line in lines:
+        if line is not None:
+            cv2.line(line_image, line[0], line[1],  color, thickness)
+    # image1 * α + image2 * β + λ
+    # image1 and image2 must be the same shape.
+    return cv2.addWeighted(image, 1.0, line_image, 0.95, 0.0)
+
+def lane_lines(image, lines):
+    left_lane, right_lane = average_slope_intercept(lines)
+
+    y1 = image.shape[0]  # bottom of the image
+    y2 = y1 * 0.6  # slightly lower than the middle
+
+    left_line = make_line_points(y1, y2, left_lane)
+    right_line = make_line_points(y1, y2, right_lane)
+
+    return left_line, right_line
+
+def make_line_points(y1, y2, line):
+    """
+    Convert a line represented in slope and intercept into pixel points
+    """
+    if line is None:
+        return None
+
+    slope, intercept = line
+
+    # make sure everything is integer as cv2.line requires it
+    x1 = int((y1 - intercept) / slope)
+    x2 = int((y2 - intercept) / slope)
+    y1 = int(y1)
+    y2 = int(y2)
+
+    return ((x1, y1), (x2, y2))
+
+def average_slope_intercept(lines):
+    left_lines = []  # (slope, intercept)
+    left_weights = []  # (length,)
+    right_lines = []  # (slope, intercept)
+    right_weights = []  # (length,)
+
+    for line in lines:
+        for x1, y1, x2, y2 in line:
+            if x2 == x1:
+                continue  # ignore a vertical line
+            slope = (y2 - y1) / (x2 - x1)
+
+
+            intercept = y1 - slope * x1
+            length = np.sqrt((y2 - y1) ** 2 + (x2 - x1) ** 2)
+            if slope < 0:  # y is reversed in image
+                left_lines.append((slope, intercept))
+                left_weights.append((length))
+            else:
+                right_lines.append((slope, intercept))
+                right_weights.append((length))
+
+    # add more weight to longer lines
+    left_lane = np.dot(left_weights, left_lines) / np.sum(left_weights) if len(left_weights) > 0 else None
+    right_lane = np.dot(right_weights, right_lines) / np.sum(right_weights) if len(right_weights) > 0 else None
+
+    return left_lane, right_lane  # (slope, intercept), (slope, intercept)
+
+def draw_lines(image, lines, color=[255, 0, 0], thickness=2, make_copy=True):
+    # the lines returned by cv2.HoughLinesP has the shape (-1, 1, 4)
+    if make_copy:
+        image = np.copy(image) # don't want to modify the original
+    for line in lines:
+        for x1,y1,x2,y2 in line:
+            cv2.line(image, (x1, y1), (x2, y2), color, thickness)
+    return image
+
+def hough_lines(image):
+    """
+    `image` should be the output of a Canny transform.
+
+    Returns hough lines (not the image with lines)
+    """
+    return cv2.HoughLinesP(image, rho=1, theta=np.pi / 180, threshold=20, minLineLength=20, maxLineGap=300)
+
+def select_region(image):
+    """
+    It keeps the region surrounded by the `vertices` (i.e. polygon).  Other area is set to 0 (black).
+    """
+    # first, define the polygon by vertices
+    rows, cols = image.shape[:2]
+    bottom_left  = [0, rows]
+    top_left     = [cols*0.07, rows*0.8]
+    bottom_right = [cols, rows]
+    top_right    = [cols*0.93, rows*0.8]
+    # the vertices are an array of polygons (i.e array of arrays) and the data type must be integer
+    vertices = np.array([[bottom_left, top_left, top_right, bottom_right]], dtype=np.int32)
+    return filter_region(image, vertices)
+
+def filter_region(image, vertices):
+    """
+    Create the mask using the vertices and apply it to the input image
+    """
+    mask = np.zeros_like(image)
+    if len(mask.shape)==2:
+        cv2.fillPoly(mask, vertices, 255)
+    else:
+        cv2.fillPoly(mask, vertices, (255,)*mask.shape[2]) # in case, the input image has a channel dimension
+    return cv2.bitwise_and(image, mask)
+
+def detect_edges(image, low_threshold=50, high_threshold=150):
+    return cv2.Canny(image, low_threshold, high_threshold)
+
+def apply_smoothing(image, kernel_size=15):
+    """
+    kernel_size must be postivie and odd
+    """
+    return cv2.GaussianBlur(image, (kernel_size, kernel_size), 0)
+
+def convert_gray_scale(image):
+    return cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)
+
+def convert_hls(image):
+    return cv2.cvtColor(image, cv2.COLOR_RGB2HLS)
+
+def select_white_yellow(image):
+    converted = convert_hls(image)
+    # white color mask
+    lower = np.uint8([  0, 140,   0])
+    upper = np.uint8([255, 255, 255])
+    white_mask = cv2.inRange(converted, lower, upper)
+    # yellow color mask
+    lower = np.uint8([ 10,   0, 100])
+    upper = np.uint8([ 40, 255, 255])
+    yellow_mask = cv2.inRange(converted, lower, upper)
+    # combine the mask
+    mask = cv2.bitwise_or(white_mask, yellow_mask)
+    return cv2.bitwise_and(image, image, mask = mask)
+
+def imageCopy(src):
+    return np.copy(src)
+
+def frameProcessing(frame):
+    result = imageCopy(frame)
+    result = select_white_yellow(result)
+    result = convert_gray_scale(result)
+    result = apply_smoothing(result)
+    result = detect_edges(result)
+    result = select_region(result)
+    result_lines = hough_lines(result)
+    print(result_lines)
+    result_lines = lane_lines(result, result_lines)
+    print(result_lines)
+    try:
+        print('left',result_lines[0])
+        print('right', result_lines[1])
+        left_line_bottom = result_lines[0][0]
+
+        left_line_top = result_lines[0][1]
+
+
+        right_line_bottom = result_lines[1][0]
+
+        right_line_top = result_lines[1][1]
+
+
+        middle_line_bottom = (int((left_line_bottom[0]+right_line_bottom[0])/2), left_line_bottom[1])
+
+        middle_line_top = (int((left_line_top[0]+right_line_top[0])/2), left_line_top[1])
+
+
+        middle_line = (middle_line_bottom, middle_line_top)
+
+
+        middle_line_slope = ((middle_line_top[0]-middle_line_bottom[0])/(middle_line_bottom[1]-middle_line_top[1]))
+
+
+        rad = math.atan(middle_line_slope)
+
+        degree = (180/3.141592)*rad
+        print(degree)
+        result = drawLine(result, middle_line_bottom, middle_line_top)
+
+
+        result = draw_lane_lines(result, result_lines)
+    except TypeError:
+        result = result
+    return result
+
+
+cap = cv2.VideoCapture('2.avi')
+
+# Get frame per second information
+fps = cap.get(cv2.CAP_PROP_FPS)
+print("Frames per second using video.get(cv2.CAP_PROP_FPS) : {0}".format(fps))
+# Get width and height information
+width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+print(width)
+height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+print(height)
+# Define the codec and create VideoWriter object
+fourcc = int(cv2.VideoWriter_fourcc(*'DIVX'))
+print(fourcc)
+out = cv2.VideoWriter('output_Line_ROI.avi', fourcc, fps, (width, height), True)
+
+cv2.namedWindow("Input", cv2.WINDOW_GUI_EXPANDED)
+cv2.namedWindow("Output", cv2.WINDOW_GUI_EXPANDED)
+
+
+while cap.isOpened():
+    # Capture frame-by-frame
+    ret, frame = cap.read()
+
+    if ret:
+        # Our operations on the frame come here
+        output = frameProcessing(frame)
+        # Write frame-by-frame
+        # Display the resulting frame
+        cv2.imshow("Input", frame)
+        cv2.imshow("Output", output)
+
+    else:
+        break
+
+    # waitKey(int(1000.0/fps)) for matching fps of video
+    if cv2.waitKey(int(1000.0/fps)) & 0xFF == ord('q'):
+        break
+
+# When everything done, release the capture
+cap.release()
+out.release()
+
+cv2.destroyAllWindows()
+
