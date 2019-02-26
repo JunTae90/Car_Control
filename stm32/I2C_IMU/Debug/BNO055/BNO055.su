@@ -1,0 +1,10 @@
+BNO055.c:224:8:I2C_read8	40	static
+BNO055.c:86:8:getTemp	0	static
+BNO055.c:94:6:getCalibration	24	static
+BNO055.c:241:6:I2C_write8	16	static
+BNO055.c:42:6:setMode	8	static
+BNO055.c:11:8:IMU_INIT	8	static
+BNO055.c:67:6:setExtCrystalUse	8	static
+BNO055.c:110:6:getSystemStatus	16	static
+BNO055.c:258:9:I2C_read16	40	static
+BNO055.c:162:6:getVector	24	static
